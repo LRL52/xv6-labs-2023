@@ -177,6 +177,7 @@ pagetable_t
 proc_pagetable(struct proc *p)
 {
   pagetable_t pagetable;
+  char *mem;
 
   // An empty page table.
   pagetable = uvmcreate();
@@ -202,6 +203,26 @@ proc_pagetable(struct proc *p)
     return 0;
   }
 
+  // Map one read-only page at USYSCALL.
+  // At the start of this page, store a struct usyscall,
+  // and initialize it to store the PID of the current process.
+  mem = kalloc();
+  if (mem == 0) {
+    uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+    uvmunmap(pagetable, TRAPFRAME, 1, 0);
+    uvmfree(pagetable, 0);
+    return 0;
+  }
+  if (mappages(pagetable, USYSCALL, PGSIZE, 
+              (uint64)mem, PTE_R | PTE_U) < 0) {
+    kfree(mem);
+    uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+    uvmunmap(pagetable, TRAPFRAME, 1, 0);
+    uvmfree(pagetable, 0);
+    return 0;
+  }
+  *(struct usyscall*)mem = (struct usyscall){ .pid = p->pid };
+
   return pagetable;
 }
 
@@ -212,6 +233,7 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
+  uvmunmap(pagetable, USYSCALL, 1, 1);
   uvmfree(pagetable, sz);
 }
 
