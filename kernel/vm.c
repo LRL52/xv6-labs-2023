@@ -293,6 +293,32 @@ freewalk(pagetable_t pagetable)
   kfree((void*)pagetable);
 }
 
+// Recursively walk a page table
+// and print the contents of a page table.
+static void
+vmprint_raw(pagetable_t pagetable, int depth) {
+  for (int i = 0; i < 512; ++i) {
+    pte_t pte = pagetable[i];
+    if (pte & PTE_V) {
+      for (int j = 0; j < depth; ++j) {
+        printf(" ..");
+      }
+      printf("%d: pte %p pa %p\n", i, pte, PTE2PA(pte));
+      if (depth <= 2) { // if current is not a leaf page table
+        uint64 child = PTE2PA(pte);
+        vmprint_raw((pagetable_t)child, depth + 1);
+      }
+    }
+  }
+}
+
+// Print the contents of a page table.
+void 
+vmprint(pagetable_t pagetable) {
+  printf("page table %p\n", pagetable);
+  vmprint_raw(pagetable, 1);
+}
+
 // Free user memory pages,
 // then free page-table pages.
 void
