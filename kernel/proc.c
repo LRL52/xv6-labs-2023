@@ -708,3 +708,43 @@ procdump(void)
     printf("\n");
   }
 }
+
+// Reports which pages have been accessed
+// and clear PTE_A after checking.
+int
+pgaccess(uint64 base, int len, uint64 mask) {
+  struct proc *p = myproc();
+  uint64 start, end;
+  int i, bit, rc;
+  uint8 *buf, *state;
+  pte_t *pte;
+
+  state = buf = kalloc();
+  if (buf == 0) {
+    return -1;
+  }
+
+  bit = *state = 0;
+  start = PGROUNDDOWN(base);
+  end = start + len * PGSIZE;
+  for (i = start; i < end; i += PGSIZE) {
+    pte = walk(p->pagetable, i, 0);
+    if (pte == 0) {
+      kfree(buf);
+      return -1;
+    }
+    if (*pte & PTE_A) {
+      *state |= 1 << bit;
+      *pte &= ~PTE_A;
+    }
+    if (++bit == 8) {
+      ++state;
+      bit = *state = 0;
+    }
+  }
+
+  rc = copyout(p->pagetable, mask, (char *)buf, (len + 8 - 1) / 8);
+  kfree(buf);
+
+  return rc;
+}
