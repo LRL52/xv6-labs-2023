@@ -377,13 +377,6 @@ do_cow_page(pte_t *pte) {
     memmove(pa2, pa1, PGSIZE);
     kfree(pa1);
     *pte = PA2PTE(pa2) | flags;
-    // printf("get_refcount(%p): %d\n", pa1, get_refcount(pa1));
-    // uvmunmap(pagetable, va, 1, 1);
-    // printf("get_refcount(%p): %d\n", pa1, get_refcount(pa1));
-    // if (mappages(pagetable, va, PGSIZE, (uint64)pa2, flags) != 0) {
-      // kfree(pa2);
-      // return -3;
-    // }
   }
 
   return 0;
@@ -408,7 +401,6 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if (*pte & PTE_COW) {
       if (do_cow_page(pte) != 0)
         return -1;
-      // pte = walk(pagetable, va0, 0); // We don't need to do this because the address of the PTE is still the same
     }
     if ((*pte & PTE_W) == 0)
       return -1;

@@ -17,7 +17,6 @@ extern char end[]; // first address after kernel.
 #define PAGE_IDX(pa) (((uint64)pa - (uint64)end) >> PGSHIFT)
 static int _refcount[RAM_SIZE / PGSIZE];
 static struct spinlock _refcount_lock[RAM_SIZE / PGSIZE];
-extern volatile int started;
 
 struct run {
   struct run *next;
@@ -53,7 +52,6 @@ freerange(void *pa_start, void *pa_end)
 // Get the reference count of the page 
 int
 get_refcount(void *pa) {
-  // if (started) printf("get_refcount: %p %d %d\n", pa, PAGE_IDX(pa), _refcount[PAGE_IDX(pa)]);
   return _refcount[PAGE_IDX(pa)];
 }
 
@@ -66,7 +64,6 @@ set_refcount(void *pa, int count) {
   acquire(&_refcount_lock[idx]);
   _refcount[idx] = count;
   release(&_refcount_lock[idx]);
-  // if (started) printf("set_refcount: %p %d %d\n", pa, PAGE_IDX(pa), _refcount[PAGE_IDX(pa)]);
 }
 
 // Increment the reference count
@@ -78,7 +75,6 @@ page_ref_inc(void *pa) {
   acquire(&_refcount_lock[idx]);
   ret = ++_refcount[idx];
   release(&_refcount_lock[idx]);
-  // if (started) printf("page_ref_inc: %p %d %d\n", pa, PAGE_IDX(pa), _refcount[PAGE_IDX(pa)]);
   return ret;
 }
 
@@ -91,7 +87,6 @@ page_ref_dec(void *pa) {
   acquire(&_refcount_lock[idx]);
   ret = --_refcount[idx];
   release(&_refcount_lock[idx]);
-  // if (started) printf("page_ref_dec: %p %d %d\n", pa, PAGE_IDX(pa), _refcount[PAGE_IDX(pa)]);
   return ret;
 }
 
@@ -127,13 +122,8 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
   
-  if (page_ref_dec(pa) > 0) {
+  if (page_ref_dec(pa) > 0)
     return;
-    // panic("kfree: refcount > 0");
-  }
-
-  // if (started)
-    // printf("kfree: %p\n", pa);
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -163,25 +153,6 @@ kalloc(void)
   if(r) {
     memset((char*)r, 5, PGSIZE); // fill with junk
     set_refcount((void*)r, 1);
-    // if (started) printf("kalloc: %p\n", r);
   }
   return (void*)r;
-}
-
-// collect the amount of free memory in bytes
-void
-calc_freemem(void)
-{
-  struct run *r;
-  uint64 count = 0;
-
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  while(r) {
-    ++count;
-    r = r->next;
-  }
-  release(&kmem.lock);
-
-  printf("Free pages: %d\n", count);
 }

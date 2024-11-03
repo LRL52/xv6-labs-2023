@@ -4,7 +4,7 @@
 #include "riscv.h"
 #include "defs.h"
 
-volatile int started = 0;
+volatile static int started = 0;
 
 // start() jumps here in supervisor mode on all CPUs.
 void

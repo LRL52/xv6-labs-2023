@@ -69,7 +69,6 @@ int             page_ref_inc(void *);
 int             page_ref_dec(void *);
 void            get_page(void *);
 void            put_page(void *);
-void            calc_freemem(void);
 
 // log.c
 void            initlog(int, struct superblock*);
@@ -175,7 +174,7 @@ int             uvmcopy(pagetable_t, pagetable_t, uint64);
 void            uvmfree(pagetable_t, uint64);
 void            uvmunmap(pagetable_t, uint64, uint64, int);
 void            uvmclear(pagetable_t, uint64);
-int             do_cow_page(pagetable_t);
+int             do_cow_page(pte_t *);
 pte_t *         walk(pagetable_t, uint64, int);
 uint64          walkaddr(pagetable_t, uint64);
 int             copyout(pagetable_t, uint64, char *, uint64);
