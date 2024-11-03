@@ -315,7 +315,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -324,13 +323,17 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    // Clear PTE_W in the PTEs of both old and new
+    // and set PTE_COW in both.
+    if (flags & PTE_W) { 
+      flags &= ~PTE_W;
+      flags |= PTE_COW;
+      *pte = CLEAR_FLAGS(*pte) | flags;
+    }
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
       goto err;
     }
+    get_page((void*)pa);
   }
   return 0;
 
@@ -352,6 +355,40 @@ uvmclear(pagetable_t pagetable, uint64 va)
   *pte &= ~PTE_U;
 }
 
+// do a copy-on-write page fault.
+int
+do_cow_page(pte_t *pte) {
+  uint flags;
+  void *pa1, *pa2;
+
+  flags = PTE_FLAGS(*pte);
+  pa1 = (void*)PTE2PA(*pte);
+  flags = (flags & ~PTE_COW) | PTE_W;
+  if (get_refcount(pa1) == 1) { 
+    // optimization: if only one process is using the page, 
+    // we can just change the flags
+    *pte = CLEAR_FLAGS(*pte) | flags;
+  } else {
+    // we need to copy the page, unmap the old page, 
+    // and map the new page
+    pa2 = kalloc();
+    if (pa2 == 0)
+      return -2;
+    memmove(pa2, pa1, PGSIZE);
+    kfree(pa1);
+    *pte = PA2PTE(pa2) | flags;
+    // printf("get_refcount(%p): %d\n", pa1, get_refcount(pa1));
+    // uvmunmap(pagetable, va, 1, 1);
+    // printf("get_refcount(%p): %d\n", pa1, get_refcount(pa1));
+    // if (mappages(pagetable, va, PGSIZE, (uint64)pa2, flags) != 0) {
+      // kfree(pa2);
+      // return -3;
+    // }
+  }
+
+  return 0;
+}
+
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
@@ -366,8 +403,14 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if(va0 >= MAXVA)
       return -1;
     pte = walk(pagetable, va0, 0);
-    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
-       (*pte & PTE_W) == 0)
+    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
+      return -1;
+    if (*pte & PTE_COW) {
+      if (do_cow_page(pte) != 0)
+        return -1;
+      // pte = walk(pagetable, va0, 0); // We don't need to do this because the address of the PTE is still the same
+    }
+    if ((*pte & PTE_W) == 0)
       return -1;
     pa0 = PTE2PA(*pte);
     n = PGSIZE - (dstva - va0);

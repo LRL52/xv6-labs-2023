@@ -36,7 +36,10 @@ trapinithart(void)
 void
 usertrap(void)
 {
-  int which_dev = 0;
+  int which_dev = 0, rc;
+  uint64 va;
+  uint flags;
+  pte_t *pte;
 
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
@@ -67,7 +70,27 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if (r_scause() == 15) {
+    // store/AMO page fault
+
+    va = r_stval();
+    if (va >= MAXVA)
+      goto KILL;
+    
+    va = PGROUNDDOWN(va);
+    pte = walk(p->pagetable, va, 0);
+    flags = PTE_FLAGS(*pte);
+    if ((flags & PTE_COW) == 0)
+      goto KILL;
+
+    rc = do_cow_page(pte);
+
+    if (rc != 0) {
+      printf("do_cow_page failed: %d\n", rc);
+      goto KILL;
+    }
   } else {
+  KILL:
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     setkilled(p);
