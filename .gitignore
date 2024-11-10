@@ -25,3 +25,7 @@ barrier
 .DS_Store
 *.dSYM
 *.pcap
+.vscode
+.cache
+.gdb_history
+compile_commands.json
