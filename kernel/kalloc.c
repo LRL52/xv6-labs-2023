@@ -21,13 +21,23 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+  int nfree; // number of free pages
+} kmem[NCPU];
+
+static char kmem_lock_name[NCPU][10];
+static int initialized = 0;
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  int i;
+
+  for (i = 0; i < NCPU; ++i) {
+    snprintf(kmem_lock_name[i], sizeof(kmem_lock_name[i]), "kmem%d", i);
+    initlock(&kmem[i].lock, kmem_lock_name[i]);
+  }
   freerange(end, (void*)PHYSTOP);
+  initialized = 1;
 }
 
 void
@@ -47,6 +57,7 @@ void
 kfree(void *pa)
 {
   struct run *r;
+  int minv = 0x7fffffff, t = 0, i;
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
@@ -56,10 +67,22 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  if (!initialized) {
+    for (i = 0; i < NCPU; ++i) {
+      if (kmem[i].nfree < minv) {
+        minv = kmem[i].nfree;
+        t = i;
+      }
+    }
+  } else {
+    t = cpuid();
+  }
+
+  acquire(&kmem[t].lock);
+  r->next = kmem[t].freelist;
+  kmem[t].freelist = r;
+  ++kmem[t].nfree;
+  release(&kmem[t].lock);
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -68,13 +91,39 @@ kfree(void *pa)
 void *
 kalloc(void)
 {
-  struct run *r;
+  struct run *r = 0;
+  int cpu, i;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  cpu = cpuid();
+  if (kmem[cpu].nfree > 0) {
+    acquire(&kmem[cpu].lock);
+    if (kmem[cpu].nfree > 0) {
+      r = kmem[cpu].freelist;
+      kmem[cpu].freelist = r->next;
+      --kmem[cpu].nfree;
+    }
+    release(&kmem[cpu].lock);
+  }
+
+  if (!r) {
+    // This is a trick that uses the congruence property of number theory, 
+    // to reduce lock contention when multiple CPUs are trying to allocate 
+    // memory simultaneously.
+    // It requires that gcd(3, NCPU) = 1.
+    for (i = (cpu + 3) % NCPU; i != cpu; i = (i + 3) % NCPU) {
+      if (kmem[i].nfree == 0)
+        continue;
+      acquire(&kmem[i].lock);
+      if (kmem[i].nfree > 0) {
+        r = kmem[i].freelist;
+        kmem[i].freelist = r->next;
+        --kmem[i].nfree;
+        release(&kmem[i].lock);
+        break;
+      }
+      release(&kmem[i].lock);
+    }
+  }
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
