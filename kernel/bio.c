@@ -24,7 +24,9 @@
 #include "buf.h"
 
 struct {
-  struct spinlock lock[NBUF];
+  struct spinlock lock[NBUF]; // block the later one when two threads that 
+                              // get the same blockno are concrrently searching
+                              // for a uncached block.
   struct buf buf[NBUF];
 
   // Linked list of all buffers, through prev/next.
@@ -52,17 +54,6 @@ binit(void)
     initlock(&bcache.lock[i], bcache_lock_name[i]);
     initsleeplock(&bcache.buf[i].lock, "buffer");
   }
-
-  // // Create linked list of buffers
-  // bcache.head.prev = &bcache.head;
-  // bcache.head.next = &bcache.head;
-  // for(b = bcache.buf; b < bcache.buf+NBUF; b++){
-  //   b->next = bcache.head.next;
-  //   b->prev = &bcache.head;
-  //   initsleeplock(&b->lock, "buffer");
-  //   bcache.head.next->prev = b;
-  //   bcache.head.next = b;
-  // }
 }
 
 // Look through buffer cache for block on device dev.
@@ -91,10 +82,26 @@ bget(uint dev, uint blockno)
 
   // Not cached.
   // Search for an unused buffer.
-  acquire(&bcache.lock[idx]); 
-  for (i = idx, j = 0; j < 10000; i = (i + 1) % NBUF, ++j) {
+  
+  // Consider the case when two threads are searching for the same uncached block,
+  // the later one should wait for the former one to finish the allocation. Otherwise,
+  // the later one may encounter an empty buffer ealier than the former one.
+  // So we block the later one until the former one finishes allocation.
+  acquire(&bcache.lock[idx]);
+
+  for (i = idx, j = 0; j < NBUF; i = (i + 1) % NBUF, ++j) {
     b = &bcache.buf[i];
     acquire(&b->spinlock);
+
+    // The former thread may have already allocated the buffer.
+    if (b->dev == dev && b->blockno == blockno) {
+      ++b->refcnt;
+      release(&b->spinlock);
+      release(&bcache.lock[idx]);
+      acquiresleep(&b->lock);
+      return b;
+    }
+    
     if (b->refcnt == 0) {
       b->dev = dev;
       b->blockno = blockno;
@@ -108,32 +115,6 @@ bget(uint dev, uint blockno)
     release(&b->spinlock);
   }
 
-
-  // acquire(&bcache.lock);
-
-  // // Is the block already cached?
-  // for(b = bcache.head.next; b != &bcache.head; b = b->next){
-  //   if(b->dev == dev && b->blockno == blockno){
-  //     b->refcnt++;
-  //     release(&bcache.lock);
-  //     acquiresleep(&b->lock);
-  //     return b;
-  //   }
-  // }
-
-  // // Not cached.
-  // // Recycle the least recently used (LRU) unused buffer.
-  // for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
-  //   if(b->refcnt == 0) {
-  //     b->dev = dev;
-  //     b->blockno = blockno;
-  //     b->valid = 0;
-  //     b->refcnt = 1;
-  //     release(&bcache.lock);
-  //     acquiresleep(&b->lock);
-  //     return b;
-  //   }
-  // }
   panic("bget: no buffers");
 }
 
@@ -170,39 +151,23 @@ brelse(struct buf *b)
 
   releasesleep(&b->lock);
 
-  // acquire(&bcache.lock);
   acquire(&b->spinlock);
   --b->refcnt;
-  // if (b->refcnt == 0) {
-  //   // no one is waiting for it.
-  //   b->next->prev = b->prev;
-  //   b->prev->next = b->next;
-  //   b->next = bcache.head.next;
-  //   b->prev = &bcache.head;
-  //   bcache.head.next->prev = b;
-  //   bcache.head.next = b;
-  // }
-  
-  // release(&bcache.lock);
   release(&b->spinlock);
 }
 
 void
 bpin(struct buf *b) {
-  // acquire(&bcache.lock);
   acquire(&b->spinlock);
   ++b->refcnt;
   release(&b->spinlock);
-  // release(&bcache.lock);
 }
 
 void
 bunpin(struct buf *b) {
-  // acquire(&bcache.lock);
   acquire(&b->spinlock);
   --b->refcnt;
   release(&b->spinlock);
-  // release(&bcache.lock);
 }
 
 

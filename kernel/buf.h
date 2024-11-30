@@ -4,7 +4,7 @@ struct buf {
   uint dev;
   uint blockno;
   struct sleeplock lock;
-  struct spinlock spinlock; // protect fields except data
+  struct spinlock spinlock; // protect other fields except data
   uint refcnt;
   uchar data[BSIZE];
 };
