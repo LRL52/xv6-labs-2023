@@ -4,9 +4,8 @@ struct buf {
   uint dev;
   uint blockno;
   struct sleeplock lock;
+  struct spinlock spinlock; // protect fields except data
   uint refcnt;
-  struct buf *prev; // LRU cache list
-  struct buf *next;
   uchar data[BSIZE];
 };
 
