@@ -180,3 +180,45 @@ filewrite(struct file *f, uint64 addr, int n)
   return ret;
 }
 
+// Write back pages to file f.
+// addr is a kernel address.
+int
+writeback(struct file *f, off_t off, uint64 addr, int nr_page) {
+  int r, ret = 0;
+  int n;
+
+  if(f->writable == 0 || f->type != FD_INODE)
+    return -1;
+
+  // write a few blocks at a time to avoid exceeding
+  // the maximum log transaction size, including
+  // i-node, indirect block, allocation blocks,
+  // and 2 blocks of slop for non-aligned writes.
+  // this really belongs lower down, since writei()
+  // might be writing a device like the console.
+  int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
+  int i = 0;
+
+  n = nr_page * PGSIZE;
+  while (i < n) {
+    int n1 = n - i;
+    if (n1 > max)
+      n1 = max;
+
+    begin_op();
+    ilock(f->ip);
+    if ((r = writei(f->ip, 1, addr + i, off, n1)) > 0)
+      off += r;
+    iunlock(f->ip);
+    end_op();
+
+    if(r != n1){
+      // error from writei
+      break;
+    }
+    i += r;
+  }
+  ret = (i == n ? n : -1);
+
+  return ret;
+}

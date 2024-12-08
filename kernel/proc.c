@@ -12,6 +12,12 @@ struct proc proc[NPROC];
 
 struct proc *initproc;
 
+struct {
+  struct vma _vma[NVMA];
+  struct vma *free_vma_list;
+  struct spinlock lock;
+} vma;
+
 int nextpid = 1;
 struct spinlock pid_lock;
 
@@ -48,6 +54,7 @@ void
 procinit(void)
 {
   struct proc *p;
+  int i;
   
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
@@ -55,6 +62,12 @@ procinit(void)
       initlock(&p->lock, "proc");
       p->state = UNUSED;
       p->kstack = KSTACK((int) (p - proc));
+  }
+  
+  initlock(&vma.lock, "vma");
+  for (i = 0; i < NVMA; ++i) {
+    vma._vma[i].next = vma.free_vma_list;
+    vma.free_vma_list = &vma._vma[i];
   }
 }
 
@@ -100,6 +113,27 @@ allocpid()
   release(&pid_lock);
 
   return pid;
+}
+
+struct vma *
+allocvma(void) {
+  struct vma *v;
+  
+  acquire(&vma.lock);
+  v = vma.free_vma_list;
+  if (v)
+    vma.free_vma_list = v->next;
+  release(&vma.lock);
+
+  return v;
+}
+
+void
+freevma(struct vma *v) {
+  acquire(&vma.lock);
+  v->next = vma.free_vma_list;
+  vma.free_vma_list = v;
+  release(&vma.lock);
 }
 
 // Look in the process table for an UNUSED proc.
@@ -161,6 +195,7 @@ freeproc(struct proc *p)
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+  p->vma = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -281,6 +316,7 @@ fork(void)
 {
   int i, pid;
   struct proc *np;
+  struct vma *iter, *prev, *next;
   struct proc *p = myproc();
 
   // Allocate process.
@@ -295,6 +331,24 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+
+  // Map the same regions as the parent.
+  for (iter = p->vma; iter; iter = iter->next) {
+    if (mmap(np, iter->start, iter->end - iter->start, 
+         iter->prot, iter->flags, iter->f, iter->offset) < 0) {
+      munmap(np, p->vma->start, MAXVMEMMAP);
+      freeproc(np);
+      release(&np->lock);
+      return -1;
+    }
+  }
+  // Reverse new process's vma list.
+  for (prev = 0, iter = np->vma; iter; iter = next) {
+    next = iter->next;
+    iter->next = prev;
+    prev = iter;
+  }
+  np->vma = prev;
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -350,6 +404,10 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  // unmap the process's mapped regions
+  if (p->vma)
+    munmap(p, p->vma->start, MAXVMEMMAP);
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){

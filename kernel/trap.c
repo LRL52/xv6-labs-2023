@@ -36,7 +36,11 @@ trapinithart(void)
 void
 usertrap(void)
 {
-  int which_dev = 0;
+  uint64 scause;
+  uint64 va, pa;
+  pte_t *pte;
+  struct vma *vma = 0, *iter;
+  int which_dev = 0, rc;
 
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
@@ -50,7 +54,7 @@ usertrap(void)
   // save user program counter.
   p->trapframe->epc = r_sepc();
   
-  if(r_scause() == 8){
+  if((scause = r_scause()) == 8){
     // system call
 
     if(killed(p))
@@ -67,7 +71,39 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else
+  if (scause == 12 || scause == 13 || scause == 15) {
+    // instruction/load/store/AMO page fault
+
+    va = r_stval();
+    if (va >= MAXVA)
+      goto KILL;
+    
+    va = PGROUNDDOWN(va);
+    pte = walk(p->pagetable, va, 0);
+    if (!pte)    // no page table entry for va
+      goto KILL;
+
+    pa = PTE2PA(*pte);
+    if (pa != 0) // page access permission denied
+      goto KILL;
+
+    for (iter = p->vma; iter; iter = iter->next) {
+      if (va >= iter->start && va < iter->end) {
+        vma = iter;
+        break;
+      }
+    }
+    if (!vma) // va is out of mmap-ed range
+      goto KILL;
+
+    rc = do_mmap_page(vma, va, pte);
+    if (rc != 0) {
+      printf("do_mmap_page failed: %d\n", rc);
+      goto KILL;
+    }
   } else {
+  KILL:
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     setkilled(p);

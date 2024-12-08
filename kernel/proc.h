@@ -79,6 +79,16 @@ struct trapframe {
   /* 280 */ uint64 t6;
 };
 
+struct vma {
+  uint64 start;
+  uint64 end;
+  int prot;
+  int flags;
+  struct file *f;
+  uint64 offset;
+  struct vma *next;
+};
+
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
@@ -96,6 +106,7 @@ struct proc {
   struct proc *parent;         // Parent process
 
   // these are private to the process, so p->lock need not be held.
+  struct vma *vma;             // Virtual memory areas (for mmap)
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
   pagetable_t pagetable;       // User page table

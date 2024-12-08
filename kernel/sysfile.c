@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -502,4 +503,55 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+uint64
+sys_mmap(void) {
+  // void *mmap(void *addr, size_t len, int prot, int flags,
+  //            int fd, off_t offset);
+  // we assume both addr and offset are 0, so we won't use them 
+  size_t len;
+  int prot, flags;
+  struct file *f;
+  struct proc *p = myproc();
+  
+  argaddr(1, &len);
+  argint(2, &prot);
+  argint(3, &flags);
+  if (argfd(4, 0, &f) < 0) {
+    return -1;
+  }
+
+  if (flags == 0 || ((flags & MAP_PRIVATE) && (flags & MAP_SHARED))) {
+    return -1;
+  }
+
+  if (f->type != FD_INODE || f->ip->type != T_FILE 
+      || len == 0) { // len > f->ip->size is allowed
+    return -1;
+  }
+
+  if (((prot & PROT_READ) && !f->readable) || 
+      ((prot & PROT_WRITE) && !f->writable && !(flags & MAP_PRIVATE))) {
+    return -1;
+  }
+
+  return mmap(p, 0, len, prot, flags, f, 0);
+}
+
+uint64
+sys_munmap(void) {
+  uint64 addr, start, end;
+  size_t len;
+  struct proc *p = myproc();
+
+  argaddr(0, &addr); // addr is page-aligned
+  argaddr(1, &len);
+  if (addr % PGSIZE) {
+    return -1;
+  }
+  start = addr;
+  end = PGROUNDUP(addr + len);
+
+  return munmap(p, start, end);  
 }

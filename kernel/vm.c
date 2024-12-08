@@ -5,6 +5,11 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "fcntl.h"
+#include "spinlock.h"
+#include "sleeplock.h"
+#include "proc.h"
+#include "file.h"
 
 /*
  * the kernel's page table.
@@ -188,11 +193,14 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: walk");
     if((*pte & PTE_V) == 0)
       panic("uvmunmap: not mapped");
+    // It's ok that PTE_FLAGS only has PTE_V, because the PTE
+    // hasn't been allocated a physical page yet.
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
       uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+      if (pa != 0)
+        kfree((void*)pa);
     }
     *pte = 0;
   }
@@ -448,4 +456,140 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int
+do_mmap_page(struct vma *vma, uint64 addr, pte_t *pte) {
+  char *mem;
+  struct file *f;
+  off_t offset;
+  uint64 pte_flags;
+  int rc;
+
+  mem = kalloc();
+  if (mem == 0) {
+    return -1;
+  }
+  
+  f = vma->f;
+  offset = vma->offset + (addr - vma->start);
+  ilock(f->ip);
+  if ((rc = readi(f->ip, 0, (uint64)mem, offset, PGSIZE)) < 0) {
+    iunlock(f->ip);
+    kfree(mem);
+    return -2;
+  }
+  iunlock(f->ip);
+
+  // zero-fill the rest of the page
+  if (rc < PGSIZE) {
+    memset(mem + rc, 0, PGSIZE - rc);
+  }
+
+  pte_flags = PTE_FLAGS(*pte);
+  pte_flags |= (vma->prot & PROT_RWX_MASK) << 1;
+  *pte = PA2PTE((uint64)mem) | pte_flags;
+
+  return 0;
+}
+
+uint64
+mmap(struct proc *p, uint64 addr, size_t len, int prot, int flags, 
+     struct file *f, off_t offset) {
+  struct vma *vma;
+  size_t len_aligned;
+
+  vma = allocvma();
+  if (vma == 0) {
+    return -1;
+  }
+
+  len_aligned = PGROUNDUP(len);
+  if (addr == 0) {
+    if (p->vma == 0) {
+      vma->end = MAXVMEMMAP;
+    } else {
+      vma->end = p->vma->start;
+    }
+    vma->start = vma->end - len_aligned;
+  } else {
+    vma->start = addr;  
+    vma->end = addr + len_aligned;
+  }
+  vma->flags = flags;
+  vma->prot = prot;
+  vma->f = f;
+  vma->offset = offset;
+
+  for (addr = vma->start; addr < vma->end; addr += PGSIZE) {
+    if (mappages(p->pagetable, addr, PGSIZE, 0, PTE_U) != 0) {
+      freevma(vma);
+      return -1;
+    }
+  }
+
+  vma->next = p->vma;
+  p->vma = vma;
+
+  // duplicate the file descriptor so that 
+  // the structure doesn't disappear when the file is closed
+  filedup(f);
+
+  return vma->start;
+}
+
+uint64
+munmap(struct proc *p, uint64 start, uint64 end) {
+  uint64 addr, l, r, flags;
+  struct vma *iter, *iter2, *prev = 0;
+  pte_t *pte;
+
+  for (iter = p->vma; iter;) {
+    l = max(start, iter->start);
+    r = min(end, iter->end);
+    if (l >= r) {
+      prev = iter;
+      iter = iter->next;
+      continue;
+    }
+    if (iter->flags & MAP_SHARED) {
+      begin_op();
+      for (addr = l; addr < r; addr += PGSIZE) {
+        pte = walk(p->pagetable, addr, 0);
+        flags = PTE_FLAGS(*pte);
+        if (flags & PTE_D) {
+          if (writeback(iter->f, iter->offset + addr - iter->start, addr, 1) < 0) {
+            end_op();
+            return -1;
+          }
+        }
+      }
+      end_op();
+    }
+    uvmunmap(p->pagetable, l, (r - l) / PGSIZE, 1);
+    if (l == iter->start && r == iter->end) {
+      fileclose(iter->f);
+      if (prev) {
+        prev->next = iter->next;
+      } else {
+        p->vma = iter->next;
+      }
+      iter2 = iter;
+      iter = iter->next;
+      freevma(iter2);
+    } else {
+      if (l == iter->start) {
+        iter->offset += r - l;
+        iter->start = r;
+      } else if (r == iter->end) {
+        iter->end = l;
+      } else {
+        panic("munmap: punch a hole in the middle of a region");
+      }
+      prev = iter;
+      iter = iter->next;
+    }
+  }
+
+  return 0;
 }

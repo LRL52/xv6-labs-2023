@@ -17,6 +17,9 @@ struct mbuf;
 struct sock;
 #endif
 
+#define max(a, b) ((a) > (b) ? (a) : (b))
+#define min(a, b) ((a) < (b) ? (a) : (b))
+
 // bio.c
 void            binit(void);
 struct buf*     bread(uint, uint);
@@ -41,6 +44,7 @@ void            fileinit(void);
 int             fileread(struct file*, uint64, int n);
 int             filestat(struct file*, uint64 addr);
 int             filewrite(struct file*, uint64, int n);
+int             writeback(struct file*, off_t, uint64, int);
 
 // fs.c
 void            fsinit(int);
@@ -103,6 +107,8 @@ void            setkilled(struct proc*);
 struct cpu*     mycpu(void);
 struct cpu*     getmycpu(void);
 struct proc*    myproc();
+struct vma *    allocvma(void);
+void            freevma(struct vma *);
 void            procinit(void);
 void            scheduler(void) __attribute__((noreturn));
 void            sched(void);
@@ -187,6 +193,10 @@ uint64          walkaddr(pagetable_t, uint64);
 int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
+int             do_mmap_page(struct vma*, uint64, pte_t*);
+uint64          mmap(struct proc*, uint64, size_t, int, int, 
+                     struct file*, off_t offset);
+uint64          munmap(struct proc*, uint64, uint64);
 
 // plic.c
 void            plicinit(void);
