@@ -1,3 +1,11 @@
+## MIT 6.1810: Operating System Engineering
+
+6.1810 xv6 labs 2023 版，Lab1-10 的个人实现代码在对应分支下。
+
+个人学习和完成实验用到的相关文档资料见 [document](./document) 目录，[个人笔记传送门](https://lrl52.top/category/6-1810/)。
+
+---
+
 xv6 is a re-implementation of Dennis Ritchie's and Ken Thompson's Unix
 Version 6 (v6).  xv6 loosely follows the structure and style of v6,
 but is implemented for a modern RISC-V multiprocessor using ANSI C.
